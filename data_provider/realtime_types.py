@@ -144,7 +144,17 @@ class UnifiedRealtimeQuote:
     change_60d: Optional[float] = None      # 60日涨跌幅(%)
     high_52w: Optional[float] = None        # 52周最高
     low_52w: Optional[float] = None         # 52周最低
-    
+
+    # === WeStock 增量字段（来自腾讯自选股接口）===
+    pe_fwd: Optional[float] = None          # 预测市盈率(Forward PE)
+    ps_ttm: Optional[float] = None          # 市销率 TTM
+    pcf_ttm: Optional[float] = None         # 市现率 TTM
+    dividend_ratio_ttm: Optional[float] = None  # 股息率 TTM(%)
+    chg_5d: Optional[float] = None          # 5日涨跌幅(%)
+    chg_10d: Optional[float] = None         # 10日涨跌幅(%)
+    chg_20d: Optional[float] = None         # 20日涨跌幅(%)
+    chg_ytd: Optional[float] = None         # 年初至今涨跌幅(%)
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（过滤 None 值）"""
         result = {
@@ -158,7 +168,10 @@ class UnifiedRealtimeQuote:
             'volume_ratio', 'turnover_rate', 'amplitude',
             'open_price', 'high', 'low', 'pre_close',
             'pe_ratio', 'pb_ratio', 'total_mv', 'circ_mv',
-            'change_60d', 'high_52w', 'low_52w'
+            'change_60d', 'high_52w', 'low_52w',
+            # WeStock 增量字段
+            'pe_fwd', 'ps_ttm', 'pcf_ttm', 'dividend_ratio_ttm',
+            'chg_5d', 'chg_10d', 'chg_20d', 'chg_ytd',
         ]
         for f in optional_fields:
             val = getattr(self, f, None)

@@ -380,12 +380,14 @@ class DataFetcherManager:
         config = get_config()
 
         # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
+        from .westock_fetcher import WeStockFetcher
         efinance = EfinanceFetcher()
         akshare = AkshareFetcher()
         tushare = TushareFetcher()  # 会根据 Token 配置自动调整优先级
         pytdx = PytdxFetcher()      # 通达信数据源（可配 PYTDX_HOST/PYTDX_PORT）
         baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
+        westock = WeStockFetcher()  # 腾讯自选股（增量字段 Enricher）
 
         # 初始化数据源列表
         self._fetchers = [
@@ -395,6 +397,7 @@ class DataFetcherManager:
             pytdx,
             baostock,
             yfinance,
+            westock,
         ]
 
         # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0）
@@ -728,6 +731,19 @@ class DataFetcherManager:
         
         # Return primary even if some fields are still missing
         if primary_quote is not None:
+            # WeStock 增量字段补充（非阻塞：失败不影响主流程）
+            try:
+                westock_fetcher = next(
+                    (f for f in self._fetchers if f.name == "WeStockFetcher"), None
+                )
+                if westock_fetcher and hasattr(westock_fetcher, 'get_realtime_quote'):
+                    ws_quote = westock_fetcher.get_realtime_quote(stock_code)
+                    if ws_quote:
+                        enriched = self._enrich_westock_fields(primary_quote, ws_quote)
+                        if enriched:
+                            logger.debug(f"[WeStock] {stock_code} 补充增量字段: {enriched}")
+            except Exception as e:
+                logger.debug(f"[WeStock] {stock_code} 增量补充失败（非致命）: {e}")
             return primary_quote
 
         # 所有数据源都失败，返回 None（降级兜底）
@@ -764,6 +780,29 @@ class DataFetcherManager:
         for f in cls._SUPPLEMENT_FIELDS:
             if getattr(primary, f, None) is None:
                 val = getattr(secondary, f, None)
+                if val is not None:
+                    setattr(primary, f, val)
+                    filled.append(f)
+        return filled
+
+    # WeStock 专属增量字段（来自腾讯自选股接口，现有数据源不提供）
+    _WESTOCK_ENRICH_FIELDS = [
+        'pe_fwd', 'ps_ttm', 'pcf_ttm', 'dividend_ratio_ttm',
+        'chg_5d', 'chg_10d', 'chg_20d', 'chg_60d', 'chg_ytd',
+        'high_52w', 'low_52w',
+    ]
+
+    @classmethod
+    def _enrich_westock_fields(cls, primary, westock_quote) -> list:
+        """
+        将 WeStock 的增量字段合并到 primary_quote 中。
+        只补充 primary 中为 None 的字段，已有值不覆盖。
+        返回填充的字段名列表。
+        """
+        filled = []
+        for f in cls._WESTOCK_ENRICH_FIELDS:
+            if getattr(primary, f, None) is None:
+                val = getattr(westock_quote, f, None)
                 if val is not None:
                     setattr(primary, f, val)
                     filled.append(f)

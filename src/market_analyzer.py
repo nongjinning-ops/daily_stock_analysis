@@ -106,7 +106,7 @@ class MarketAnalyzer:
         self.search_service = search_service
         self.analyzer = analyzer
         self.data_manager = DataFetcherManager()
-        self.region = region if region in ("cn", "us") else "cn"
+        self.region = region if region in ("cn", "us", "hk") else "cn"
         self.profile: MarketProfile = get_profile(self.region)
 
     def get_market_overview(self) -> MarketOverview:
@@ -256,7 +256,7 @@ class MarketAnalyzer:
             logger.info("[大盘] 开始搜索市场新闻...")
             
             # 根据 region 设置搜索上下文名称，避免美股搜索被解读为 A 股语境
-            market_name = "大盘" if self.region == "cn" else "US market"
+            market_name = "大盘" if self.region == "cn" else ("港股市场" if self.region == "hk" else "US market")
             for query in search_queries:
                 response = self.search_service.search_stock_news(
                     stock_code="market",
@@ -483,67 +483,69 @@ Lagging: {bottom_sectors_text if bottom_sectors_text else "N/A"}"""
         indices_placeholder = indices_text if indices_text else ("No index data (API error)" if self.region == "us" else "暂无指数数据（接口异常）")
         news_placeholder = news_text if news_text else ("No relevant news" if self.region == "us" else "暂无相关新闻")
 
-        # 美股场景使用英文提示语，便于生成更符合美股语境的报告
-        if self.region == "us":
-            data_no_indices_hint_en = (
-                "Note: Market data fetch failed. Rely mainly on [Market News] for qualitative analysis. Do not invent index levels."
+        # 美股/港股使用中文提示语
+        if self.region in ("us", "hk"):
+            data_no_indices_hint_zh = (
+                "注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。"
                 if not indices_text
                 else ""
             )
-            return f"""You are a professional US/A/H market analyst. Please produce a concise US market recap report based on the data below.
+            region_label = "美股" if self.region == "us" else "港股"
+            return f"""你是一位专业的{region_label}市场分析师，请根据以下数据生成一份简洁的{region_label}大盘复盘报告。
 
-[Requirements]
-- Output pure Markdown only
-- No JSON
-- No code blocks
-- Use emoji sparingly in headings (at most one per heading)
+【重要】输出要求：
+- 必须输出纯 Markdown 文本格式
+- 禁止输出 JSON 格式
+- 禁止输出代码块
+- emoji 仅在标题处少量使用（每个标题最多1个）
+- 全程使用中文
 
 ---
 
-# Today's Market Data
+# 今日行情数据
 
-## Date
+## 日期
 {overview.date}
 
-## Major Indices
+## 主要指数
 {indices_placeholder}
 
 {stats_block}
 
 {sector_block}
 
-## Market News
+## 市场新闻
 {news_placeholder}
 
-{data_no_indices_hint_en}
+{data_no_indices_hint_zh}
 
 ---
 
-# Output Template (follow this structure)
+# 输出模板（请按此结构输出）
 
-## {overview.date} US Market Recap
+## {overview.date} {region_label}大盘复盘
 
-### 1. Market Summary
-(2-3 sentences on overall market performance, index moves, volume)
+### 1. 行情概述
+（2-3句概括整体表现、指数涨跌幅、成交量）
 
-### 2. Index Commentary
-(Analyse S&P 500, Nasdaq, Dow and other major index moves.)
+### 2. 指数解读
+（分析主要指数走势及原因）
 
-### 3. Fund Flows
-(Interpret volume and flow implications)
+### 3. 资金流向
+（解读成交量与资金面含义）
 
-### 4. Sector/Theme Highlights
-(Analyze drivers behind leading/lagging sectors)
+### 4. 板块/主题亮点
+（分析领涨领跌板块的驱动因素）
 
-### 5. Outlook
-(Short-term view based on price action and news)
+### 5. 后市展望
+（基于价格行为和新闻的短期判断）
 
-### 6. Risk Alerts
-(Key risks to watch)
+### 6. 风险提示
+（需关注的关键风险）
 
 ---
 
-Output the report content directly, no extra commentary.
+直接输出报告正文，无需额外说明。
 """
 
         # A 股场景使用中文提示语
@@ -659,7 +661,7 @@ Output the report content directly, no extra commentary.
 - **领涨**: {top_text}
 - **领跌**: {bottom_text}
 """
-        market_label = "A股" if self.region == "cn" else "美股"
+        market_label = {"cn": "A股", "us": "美股", "hk": "港股"}.get(self.region, "A股")
         report = f"""## {overview.date} 大盘复盘
 
 ### 一、市场总结

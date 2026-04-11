@@ -53,7 +53,8 @@ def run_market_review(
         if override_region is not None
         else (getattr(config, 'market_review_region', 'cn') or 'cn')
     )
-    if region not in ('cn', 'us', 'both'):
+    valid_regions = ('cn', 'us', 'hk', 'both', 'hk_us')
+    if region not in valid_regions:
         region = 'cn'
 
     try:
@@ -72,6 +73,27 @@ def run_market_review(
             review_report = ''
             if cn_report:
                 review_report = f"# A股大盘复盘\n\n{cn_report}"
+            if us_report:
+                if review_report:
+                    review_report += "\n\n---\n\n> 以下为美股大盘复盘\n\n"
+                review_report += f"# 美股大盘复盘\n\n{us_report}"
+            if not review_report:
+                review_report = None
+        elif region == 'hk_us':
+            # 顺序执行港股 + 美股，合并报告
+            hk_analyzer = MarketAnalyzer(
+                search_service=search_service, analyzer=analyzer, region='hk'
+            )
+            us_analyzer = MarketAnalyzer(
+                search_service=search_service, analyzer=analyzer, region='us'
+            )
+            logger.info("生成港股大盘复盘报告...")
+            hk_report = hk_analyzer.run_daily_review()
+            logger.info("生成美股大盘复盘报告...")
+            us_report = us_analyzer.run_daily_review()
+            review_report = ''
+            if hk_report:
+                review_report = f"# 港股大盘复盘\n\n{hk_report}"
             if us_report:
                 if review_report:
                     review_report += "\n\n---\n\n> 以下为美股大盘复盘\n\n"

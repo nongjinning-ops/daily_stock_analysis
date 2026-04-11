@@ -120,21 +120,36 @@ def compute_effective_region(
     Compute effective market review region given config and open markets.
 
     Args:
-        config_region: From MARKET_REVIEW_REGION ('cn' | 'us' | 'both')
+        config_region: From MARKET_REVIEW_REGION ('cn' | 'us' | 'hk' | 'both' | 'hk_us')
         open_markets: Markets open today
 
     Returns:
         None: caller uses config default (check disabled)
         '': all relevant markets closed, skip market review
-        'cn' | 'us' | 'both': effective subset for today
+        'cn' | 'us' | 'hk' | 'both' | 'hk_us': effective subset for today
     """
-    if config_region not in ("cn", "us", "both"):
+    if config_region not in ("cn", "us", "hk", "both", "hk_us"):
         config_region = "cn"
     if config_region == "cn":
         return "cn" if "cn" in open_markets else ""
     if config_region == "us":
         return "us" if "us" in open_markets else ""
-    # both
+    if config_region == "hk":
+        # 港股交易日逻辑：hk 前缀股票在 trading_calendar 中被识别为 "hk" market
+        # 但部分实现可能仍将港股映射到 "us" 或 "hk"，此处做兼容
+        return "hk" if ("hk" in open_markets or "us" in open_markets) else ""
+    if config_region == "hk_us":
+        parts = []
+        if "hk" in open_markets or "us" in open_markets:
+            parts.append("hk")
+        if "us" in open_markets:
+            parts.append("us")
+        if not parts:
+            return ""
+        if len(parts) == 2:
+            return "hk_us"
+        return parts[0]
+    # both (cn + us)
     parts = []
     if "cn" in open_markets:
         parts.append("cn")

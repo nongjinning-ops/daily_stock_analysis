@@ -284,6 +284,9 @@ class YfinanceFetcher(BaseFetcher):
         if region == "us":
             return self._get_us_main_indices(yf)
 
+        if region == "hk":
+            return self._get_hk_main_indices(yf)
+
         # A 股指数：akshare 代码 -> (yfinance 代码, 显示名称)
         yf_mapping = {
             'sh000001': ('000001.SS', '上证指数'),
@@ -338,6 +341,33 @@ class YfinanceFetcher(BaseFetcher):
 
         except Exception as e:
             logger.error(f"[Yfinance] 获取美股指数行情失败: {e}")
+
+        return None
+
+    def _get_hk_main_indices(self, yf) -> Optional[List[Dict[str, Any]]]:
+        """获取港股主要指数行情（HSI、HSTECH、HSCEI），复用 _fetch_yf_ticker_data"""
+        hk_indices = [
+            ('^HSI', '恒生指数', 'HSI'),
+            ('^HSTECH', '恒生科技指数', 'HSTECH'),
+            ('^HSCE', '国企指数', 'HSCEI'),
+        ]
+        results = []
+        try:
+            for yf_symbol, name, code in hk_indices:
+                try:
+                    item = self._fetch_yf_ticker_data(yf, yf_symbol, name, code)
+                    if item:
+                        results.append(item)
+                        logger.debug(f"[Yfinance] 获取港股指数 {name} 成功")
+                except Exception as e:
+                    logger.warning(f"[Yfinance] 获取港股指数 {name} 失败: {e}")
+
+            if results:
+                logger.info(f"[Yfinance] 成功获取 {len(results)} 个港股指数行情")
+                return results
+
+        except Exception as e:
+            logger.error(f"[Yfinance] 获取港股指数行情失败: {e}")
 
         return None
 

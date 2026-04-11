@@ -39,6 +39,7 @@ class LLMResponse:
     usage: Dict[str, Any] = field(default_factory=dict)       # token usage info
     provider: str = ""                     # which provider handled this call
     raw: Any = None                        # raw provider response for debugging
+    gemini_raw_content: Any = None         # raw google.genai Content object; preserved for thought_signature in multi-turn
 
 
 # Models that auto-return reasoning_content; do NOT send extra_body (may cause 400).
@@ -104,7 +105,8 @@ class LLMToolAdapter:
         config = config or get_config()
 
         # Provider clients (lazy-initialized)
-        self._gemini_model = None
+        self._gemini_client = None  # google-genai Client
+        self._gemini_model = None   # model name string
         self._anthropic_client = None
         self._openai_client = None
 
@@ -123,16 +125,15 @@ class LLMToolAdapter:
         """Initialize all available LLM providers."""
         config = self._config
 
-        # Gemini
+        # Gemini (uses google-genai SDK to support thought_signature / function calling)
         gemini_key = config.gemini_api_key
         if gemini_key and not gemini_key.startswith("your_") and len(gemini_key) > 10:
             try:
-                import google.generativeai as genai
-                genai.configure(api_key=gemini_key)
-                model_name = config.gemini_model or "gemini-2.5-flash"
-                self._gemini_model = genai.GenerativeModel(model_name=model_name)
+                from google import genai as google_genai
+                self._gemini_client = google_genai.Client(api_key=gemini_key)
+                self._gemini_model = config.gemini_model or "gemini-2.5-flash"
                 self._gemini_available = True
-                logger.info(f"Agent LLM: Gemini initialized (model={model_name})")
+                logger.info(f"Agent LLM: Gemini initialized (model={self._gemini_model})")
             except Exception as e:
                 logger.warning(f"Agent LLM: Gemini init failed: {e}")
 
@@ -243,83 +244,76 @@ class LLMToolAdapter:
         messages: List[Dict[str, Any]],
         tools: List[dict],
     ) -> LLMResponse:
-        """Call Gemini with function-calling support."""
-        import google.generativeai as genai
-        from google.generativeai.types import content_types
+        """Call Gemini with function-calling support (google-genai SDK)."""
+        from google import genai as google_genai
+        from google.genai import types as genai_types
 
         config = self._config
-        model_name = config.gemini_model or "gemini-2.5-flash"
+        model_name = self._gemini_model or config.gemini_model or "gemini-2.5-flash"
 
-        # Extract system instruction
+        # Build contents list using new SDK types
         system_instruction = None
-        chat_messages = []
+        contents = []
         for msg in messages:
-            if msg["role"] == "system":
+            role = msg["role"]
+            if role == "system":
                 system_instruction = msg["content"]
-            elif msg["role"] == "user":
-                chat_messages.append({"role": "user", "parts": [msg["content"]]})
-            elif msg["role"] == "assistant":
-                parts = []
-                if msg.get("content"):
-                    parts.append(msg["content"])
-                # Handle assistant tool_calls in history
-                if msg.get("tool_calls"):
-                    for tc in msg["tool_calls"]:
-                        parts.append(genai.protos.Part(
-                            function_call=genai.protos.FunctionCall(
+            elif role == "user":
+                contents.append(genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part.from_text(text=msg["content"])]
+                ))
+            elif role == "assistant":
+                # Prefer raw Gemini Content to preserve thought_signature across turns
+                if msg.get("_gemini_raw_content") is not None:
+                    contents.append(msg["_gemini_raw_content"])
+                else:
+                    parts = []
+                    if msg.get("content"):
+                        parts.append(genai_types.Part.from_text(text=msg["content"]))
+                    if msg.get("tool_calls"):
+                        for tc in msg["tool_calls"]:
+                            parts.append(genai_types.Part.from_function_call(
                                 name=tc["name"],
-                                args=tc["arguments"]
-                            )
-                        ))
-                chat_messages.append({"role": "model", "parts": parts})
-            elif msg["role"] == "tool":
-                # Tool result message
-                chat_messages.append({
-                    "role": "user",
-                    "parts": [genai.protos.Part(
-                        function_response=genai.protos.FunctionResponse(
-                            name=msg["name"],
-                            response={"result": msg["content"]}
-                        )
+                                args=tc["arguments"],
+                            ))
+                    if parts:
+                        contents.append(genai_types.Content(role="model", parts=parts))
+            elif role == "tool":
+                contents.append(genai_types.Content(
+                    role="user",
+                    parts=[genai_types.Part.from_function_response(
+                        name=msg["name"],
+                        response={"result": msg["content"]},
                     )]
-                })
+                ))
 
         # Build tool declarations
         gemini_tools = None
         if tools:
             function_declarations = []
             for t in tools:
-                function_declarations.append(
-                    genai.protos.FunctionDeclaration(
-                        name=t["name"],
-                        description=t["description"],
-                        parameters=t.get("parameters")
-                    )
-                )
-            gemini_tools = [genai.protos.Tool(function_declarations=function_declarations)]
+                params = t.get("parameters")
+                # Convert raw dict schema to genai_types.Schema if needed
+                if isinstance(params, dict):
+                    params = self._dict_to_schema(params)
+                function_declarations.append(genai_types.FunctionDeclaration(
+                    name=t["name"],
+                    description=t["description"],
+                    parameters=params,
+                ))
+            gemini_tools = [genai_types.Tool(function_declarations=function_declarations)]
 
-        # Create model with system instruction
-        model = genai.GenerativeModel(
-            model_name=model_name,
+        generate_config = genai_types.GenerateContentConfig(
+            temperature=config.gemini_temperature,
             system_instruction=system_instruction,
             tools=gemini_tools,
         )
 
-        # Build contents
-        contents = []
-        for cm in chat_messages:
-            contents.append(genai.protos.Content(
-                role=cm["role"],
-                parts=[genai.protos.Part(text=p) if isinstance(p, str) else p for p in cm["parts"]]
-            ))
-
-        generation_config = genai.types.GenerationConfig(
-            temperature=config.gemini_temperature,
-        )
-
-        response = model.generate_content(
+        response = self._gemini_client.models.generate_content(
+            model=model_name,
             contents=contents,
-            generation_config=generation_config,
+            config=generate_config,
         )
 
         # Parse response
@@ -328,7 +322,7 @@ class LLMToolAdapter:
 
         if response.candidates and response.candidates[0].content.parts:
             for part in response.candidates[0].content.parts:
-                if hasattr(part, 'function_call') and part.function_call.name:
+                if hasattr(part, 'function_call') and part.function_call and part.function_call.name:
                     fc = part.function_call
                     args = dict(fc.args) if fc.args else {}
                     tool_calls.append(ToolCall(
@@ -354,6 +348,34 @@ class LLMToolAdapter:
             usage=usage,
             provider="gemini",
             raw=response,
+            gemini_raw_content=response.candidates[0].content if response.candidates else None,
+        )
+
+    @staticmethod
+    def _dict_to_schema(d: dict):
+        """Recursively convert a raw JSON Schema dict to google.genai.types.Schema."""
+        from google.genai import types as genai_types
+        type_map = {
+            "object": "OBJECT", "array": "ARRAY",
+            "string": "STRING", "number": "NUMBER",
+            "integer": "INTEGER", "boolean": "BOOLEAN",
+            "OBJECT": "OBJECT", "ARRAY": "ARRAY",
+            "STRING": "STRING", "NUMBER": "NUMBER",
+            "INTEGER": "INTEGER", "BOOLEAN": "BOOLEAN",
+        }
+        type_str = type_map.get(d.get("type", ""), "STRING")
+        properties = None
+        if "properties" in d and isinstance(d["properties"], dict):
+            properties = {k: LLMToolAdapter._dict_to_schema(v) for k, v in d["properties"].items()}
+        items = None
+        if "items" in d and isinstance(d["items"], dict):
+            items = LLMToolAdapter._dict_to_schema(d["items"])
+        return genai_types.Schema(
+            type=type_str,
+            description=d.get("description"),
+            properties=properties,
+            required=d.get("required"),
+            items=items,
         )
 
     # ============================================================
