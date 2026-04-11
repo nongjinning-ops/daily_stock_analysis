@@ -425,6 +425,13 @@ class DatabaseManager:
             autoflush=False,
         )
         
+        # Register trading module models so their tables are created alongside existing ones.
+        # Import here to avoid circular imports (trading.models imports Base from this module).
+        try:
+            import trading.models  # noqa: F401
+        except ImportError:
+            pass
+
         # 创建所有表
         Base.metadata.create_all(self._engine)
 

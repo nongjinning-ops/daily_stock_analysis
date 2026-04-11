@@ -871,6 +871,17 @@ class StockAnalysisPipeline:
                     f"评分 {result.sentiment_score}"
                 )
                 
+                # Paper trading hook: auto-place Alpaca paper order if enabled
+                if getattr(self.config, 'paper_trading_enabled', False):
+                    try:
+                        from trading.paper_trader import PaperTrader
+                        # Retrieve the DB id of the just-saved analysis for linkage
+                        analysis_db_id = getattr(result, '_db_id', None)
+                        PaperTrader.get_instance().on_analysis_result(result, analysis_db_id)
+                    except Exception as _pt_err:
+                        # Never let paper trading errors break the main analysis flow
+                        logger.warning(f"[{code}] Paper trading hook error (non-fatal): {_pt_err}")
+
                 # 单股推送模式（#55）：每分析完一只股票立即推送
                 if single_stock_notify and self.notifier.is_available():
                     try:

@@ -184,7 +184,12 @@ class Config:
     backtest_min_age_days: int = 14
     backtest_engine_version: str = "v1"
     backtest_neutral_band_pct: float = 2.0
-    
+
+    # === Paper Trading (Alpaca) ===
+    paper_trading_enabled: bool = False  # Set true to auto-place paper orders on Alpaca
+    paper_position_size_usd: float = 1000.0  # USD per paper trade
+    paper_min_sentiment_score: int = 0  # Minimum sentiment score gate (0 = disabled)
+
     # === 日志配置 ===
     log_dir: str = "./logs"  # 日志文件目录
     log_level: str = "INFO"  # 日志级别
@@ -468,6 +473,9 @@ class Config:
             backtest_min_age_days=int(os.getenv('BACKTEST_MIN_AGE_DAYS', '14')),
             backtest_engine_version=os.getenv('BACKTEST_ENGINE_VERSION', 'v1'),
             backtest_neutral_band_pct=float(os.getenv('BACKTEST_NEUTRAL_BAND_PCT', '2.0')),
+            paper_trading_enabled=os.getenv('PAPER_TRADING_ENABLED', 'false').lower() in ('true', '1', 'yes'),
+            paper_position_size_usd=float(os.getenv('PAPER_POSITION_SIZE_USD', '1000')),
+            paper_min_sentiment_score=int(os.getenv('PAPER_MIN_SENTIMENT_SCORE', '0')),
             log_dir=os.getenv('LOG_DIR', './logs'),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
             max_workers=int(os.getenv('MAX_WORKERS', '3')),
