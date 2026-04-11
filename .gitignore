@@ -77,3 +77,8 @@ CLAUDE.md
 static/
 /apps/dsa-desktop/dist/
 /apps/dsa-desktop/node_modules/
+
+# trading input data (personal trade history, not for version control)
+trading/input/
+trading/*.csv
+trading/*.md
