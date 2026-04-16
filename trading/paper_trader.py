@@ -154,15 +154,43 @@ class PaperTrader:
             return None
 
         # --- Extract prices from AI dashboard ---
-        sniper = result.get_sniper_points()
-        ideal_buy = _parse_price(sniper.get("ideal_buy") or sniper.get("理想买点"))
-        stop_loss = _parse_price(sniper.get("stop_loss") or sniper.get("止损位"))
-        take_profit = _parse_price(sniper.get("take_profit") or sniper.get("目标价") or sniper.get("止盈位"))
+        # Try multiple sources: sniper_points dict → direct result attributes → current_price
+        sniper = {}
+        try:
+            sniper = result.get_sniper_points() or {}
+        except Exception:
+            pass
 
-        # Fallback to current_price if ideal_buy not available
-        if not ideal_buy and result.current_price:
+        ideal_buy = (
+            _parse_price(sniper.get("ideal_buy"))
+            or _parse_price(sniper.get("理想买点"))
+            or _parse_price(sniper.get("入场价"))
+            or _parse_price(getattr(result, "ideal_buy", None))  # DB field on AnalysisResult
+        )
+        stop_loss = (
+            _parse_price(sniper.get("stop_loss"))
+            or _parse_price(sniper.get("止损位"))
+            or _parse_price(sniper.get("止损价"))
+            or _parse_price(getattr(result, "stop_loss", None))
+        )
+        take_profit = (
+            _parse_price(sniper.get("take_profit"))
+            or _parse_price(sniper.get("目标价"))
+            or _parse_price(sniper.get("止盈位"))
+            or _parse_price(sniper.get("目标位"))
+            or _parse_price(getattr(result, "take_profit", None))
+        )
+
+        # Fallback to current_price if ideal_buy still not available
+        if not ideal_buy and getattr(result, "current_price", None):
             ideal_buy = result.current_price
-            logger.info(f"{result.code}: ideal_buy not in sniper_points, using current_price {ideal_buy}")
+            logger.info(f"{result.code}: ideal_buy not found, using current_price {ideal_buy}")
+
+        # Last resort: fetch latest close price from data_provider
+        if not ideal_buy:
+            ideal_buy = _fetch_last_close(result.code)
+            if ideal_buy:
+                logger.info(f"{result.code}: using last close price as entry: {ideal_buy}")
 
         if not ideal_buy:
             logger.warning(f"Skipping {result.code}: cannot determine entry price from analysis.")
@@ -278,3 +306,30 @@ def _score_to_confidence(sentiment_score: int) -> int:
     elif sentiment_score >= 45:
         return 2
     return 1
+
+
+def _fetch_last_close(code: str) -> Optional[float]:
+    """Fetch the most recent close price for a US stock from data_provider or DB."""
+    # Try data_provider first
+    try:
+        from data_provider.base import DataProviderManager
+        provider = DataProviderManager()
+        df = provider.get_stock_data(code, days=5)
+        if df is not None and not df.empty:
+            return float(df.iloc[-1]["close"])
+    except Exception:
+        pass
+    # Fallback: query stock_daily table
+    try:
+        from src.storage import DatabaseManager
+        from sqlalchemy import text
+        db = DatabaseManager.get_instance()
+        with db.session_scope() as s:
+            row = s.execute(text(
+                "SELECT close FROM stock_daily WHERE code = :code ORDER BY date DESC LIMIT 1"
+            ), {"code": code}).fetchone()
+            if row and row[0]:
+                return float(row[0])
+    except Exception:
+        pass
+    return None
