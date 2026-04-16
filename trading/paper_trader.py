@@ -145,7 +145,17 @@ class PaperTrader:
             return None
         logger.info(f"{result.code}: buy signal detected in advice='{advice}'")
 
-        # --- Gate 3: Optional sentiment gate ---
+        # --- Gate 3: Dedup — skip if there is already an open Alpaca order for this symbol ---
+        try:
+            open_orders = self.alpaca.get_orders(status="open", limit=100)
+            open_buy_symbols = {o["symbol"] for o in open_orders if o["side"] == "buy"}
+            if result.code.upper() in open_buy_symbols:
+                logger.info(f"Skipping {result.code}: already has an open buy order on Alpaca.")
+                return None
+        except Exception as e:
+            logger.warning(f"{result.code}: failed to check open orders for dedup: {e}")
+
+        # --- Gate 4: Optional sentiment gate ---
         if self.config.min_sentiment_score > 0 and result.sentiment_score < self.config.min_sentiment_score:
             logger.info(
                 f"Skipping {result.code}: sentiment {result.sentiment_score} < "
