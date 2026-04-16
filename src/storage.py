@@ -1163,47 +1163,71 @@ class DatabaseManager:
     @staticmethod
     def _parse_sniper_value(value: Any) -> Optional[float]:
         """
-        解析狙击点位数值
+        Parse sniper point price value from various AI response formats.
+        Handles: "261.10", "191.50 (MA5支撑位)", "目标价：280元", "$168.5", "168-170"
+        Filters out technical indicator numbers like MA5, MA10, MA20.
         """
         if value is None:
             return None
         if isinstance(value, (int, float)):
             return float(value)
 
-        text = str(value).replace(',', '').strip()
+        text = str(value).replace(',', '').replace('$', '').replace('￥', '').strip()
         if not text:
             return None
 
-        # 尝试直接解析纯数字字符串
+        # Step 1: try direct float parse (handles "261.10")
         try:
             return float(text)
         except ValueError:
             pass
 
-        # 优先截取 "：" 到 "元" 之间的价格，避免误提取 MA5/MA10 等技术指标数字
+        # Step 2: if text contains "元", extract number before it
         colon_pos = max(text.rfind("："), text.rfind(":"))
         yuan_pos = text.find("元", colon_pos + 1 if colon_pos != -1 else 0)
         if yuan_pos != -1:
             segment_start = colon_pos + 1 if colon_pos != -1 else 0
             segment = text[segment_start:yuan_pos]
-            
-            # 使用 finditer 并过滤掉 MA 开头的数字
-            matches = list(re.finditer(r"-?\d+(?:\.\d+)?", segment))
-            valid_numbers = []
-            for m in matches:
-                # 检查前面是否是 "MA" (忽略大小写)
-                start_idx = m.start()
-                if start_idx >= 2:
-                    prefix = segment[start_idx-2:start_idx].upper()
-                    if prefix == "MA":
-                        continue
-                valid_numbers.append(m.group())
-            
-            if valid_numbers:
-                try:
-                    return float(valid_numbers[-1])
-                except ValueError:
-                    pass
+            result = DatabaseManager._extract_price_from_segment(segment)
+            if result is not None:
+                return result
+
+        # Step 3: general regex extraction — handles "191.50 (MA5支撑位)" etc.
+        # Use the portion before any parentheses/brackets first
+        clean = text.split("(")[0].split("（")[0].strip()
+        try:
+            return float(clean)
+        except ValueError:
+            pass
+
+        # Step 4: extract from the full text, filtering MA-prefixed numbers
+        result = DatabaseManager._extract_price_from_segment(text)
+        if result is not None:
+            return result
+
+        return None
+
+    @staticmethod
+    def _extract_price_from_segment(segment: str) -> Optional[float]:
+        """Extract the first valid price number from a text segment, skipping MA-prefixed values."""
+        matches = list(re.finditer(r"-?\d+(?:\.\d+)?", segment))
+        for m in matches:
+            start_idx = m.start()
+            # Skip numbers prefixed by "MA" (e.g. MA5, MA10, MA20)
+            if start_idx >= 2:
+                prefix = segment[start_idx - 2:start_idx].upper()
+                if prefix == "MA":
+                    continue
+            if start_idx >= 1:
+                prefix1 = segment[start_idx - 1:start_idx].upper()
+                if prefix1 == "A" and start_idx >= 2 and segment[start_idx - 2:start_idx - 1].upper() == "M":
+                    continue
+            try:
+                val = float(m.group())
+                if val > 0:
+                    return val
+            except ValueError:
+                continue
         return None
 
     def _extract_sniper_points(self, result: Any) -> Dict[str, Optional[float]]:
