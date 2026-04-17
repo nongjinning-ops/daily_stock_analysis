@@ -644,6 +644,13 @@ def main() -> int:
             return 0
 
         # 模式2: 定时任务模式
+        # --force-run bypasses schedule mode and runs a single analysis immediately
+        if getattr(args, 'force_run', False):
+            logger.info("模式: 强制单次运行 (--force-run 覆盖 SCHEDULE_ENABLED)")
+            run_full_analysis(config, args, stock_codes)
+            logger.info("\n程序执行完成")
+            return 0
+
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")
             logger.info(f"每日执行时间: {config.schedule_time}")
